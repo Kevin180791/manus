@@ -1,0 +1,53 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: aiuser
+      POSTGRES_PASSWORD: aisecret
+      POSTGRES_DB: ai_db
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  chromadb:
+    image: chromadb/chroma
+    ports:
+      - "8000:8000"
+
+  backend:
+    build: ./backend
+    depends_on:
+      - postgres
+      - chromadb
+    ports:
+      - "8001:8001"
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+
+  ollama:
+    image: ollama/ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+
+  n8n:
+    image: n8nio/n8n
+    ports:
+      - "5678:5678"
+    environment:
+      - DB_TYPE=postgresdb
+      - DB_POSTGRESDB_HOST=postgres
+      - DB_POSTGRESDB_DATABASE=ai_db
+      - DB_POSTGRESDB_USER=aiuser
+      - DB_POSTGRESDB_PASSWORD=aisecret
+
+volumes:
+  pgdata:
+  ollama-data:
