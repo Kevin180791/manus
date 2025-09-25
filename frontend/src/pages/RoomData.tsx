@@ -1,11 +1,18 @@
 
 import { useState } from "react";
 
+interface Room {
+  name: string;
+  area: string;
+  usage: string;
+  heatLoad: string;
+}
+
 function RoomData() {
-  const [rooms, setRooms] = useState([{ name: "", area: "", usage: "", heatLoad: "" }]);
+  const [rooms, setRooms] = useState<Room[]>([{ name: "", area: "", usage: "", heatLoad: "" }]);
   const [aiResponse, setAiResponse] = useState("");
 
-  const handleChange = (index: number, field: string, value: string) => {
+  const handleChange = (index: number, field: keyof Room, value: string) => {
     const newRooms = [...rooms];
     newRooms[index][field] = value;
     setRooms(newRooms);
@@ -17,7 +24,7 @@ function RoomData() {
 
   const sendToAgent = async () => {
     const roomText = rooms.map(
-      (r, i) => \`Raum \${i + 1}: \${r.name}, Nutzung: \${r.usage}, Fläche: \${r.area} m², Heizlast: \${r.heatLoad} kW.\`
+      (r, i) => `Raum ${i + 1}: ${r.name}, Nutzung: ${r.usage}, Fläche: ${r.area} m², Heizlast: ${r.heatLoad} kW.`
     ).join("\n");
     const res = await fetch("/api/agent/tasks/normcheck", {
       method: "POST",

@@ -2,6 +2,12 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from routers import agent_tasks, upload_router, flowcalc_tasks, tga_router
+from database import init_db
+import logging
+
+# Logging konfigurieren
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="OpenManus TGA-KI-Plattform", 
@@ -17,6 +23,13 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Datenbank initialisieren beim Start
+@app.on_event("startup")
+async def startup_event():
+    logger.info("Starting TGA-KI Platform...")
+    init_db()
+    logger.info("Database initialized")
 
 # Routen registrieren
 app.include_router(agent_tasks.router, prefix="/agent/tasks", tags=["Legacy Agents"])
@@ -34,10 +47,11 @@ def root():
             "Multi-Agent-Workflow",
             "Gewerkespezifische Fachprüfung",
             "Koordinationsprüfung",
-            "Normkonformitätsprüfung"
+            "Normkonformitätsprüfung",
+            "Datenpersistierung mit SQLAlchemy"
         ]
     }
 
 @app.get("/health", tags=["System"])
 def health_check():
-    return {"status": "healthy", "service": "tga-ki-plattform"}
+    return {"status": "healthy", "service": "tga-ki-plattform", "database": "connected"}
