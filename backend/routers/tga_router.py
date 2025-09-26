@@ -317,3 +317,42 @@ def _get_leistungsphase_beschreibung(phase: LeistungsPhase) -> str:
     }
     return beschreibungen.get(phase, "")
 
+
+
+@router.get("/pruefung/bericht/{auftrag_id}")
+async def generiere_bericht(
+    auftrag_id: str,
+    db: Session = Depends(get_db)
+):
+    """Generiert einen PDF-Bericht für eine Prüfung"""
+    try:
+        from services.bericht_service import BerichtService
+        from fastapi.responses import FileResponse
+        
+        bericht_service = BerichtService(db)
+        
+        # Prüfe ob Bericht bereits existiert
+        existing_path = bericht_service.hole_bericht_pfad(auftrag_id)
+        if existing_path:
+            return FileResponse(
+                existing_path,
+                media_type='application/pdf',
+                filename=f"pruefbericht_{auftrag_id}.pdf"
+            )
+        
+        # Generiere neuen Bericht
+        bericht_path = bericht_service.generiere_pruefbericht(auftrag_id)
+        
+        if not bericht_path:
+            raise HTTPException(status_code=404, detail="Prüfauftrag nicht gefunden oder Bericht konnte nicht erstellt werden")
+        
+        return FileResponse(
+            bericht_path,
+            media_type='application/pdf',
+            filename=f"pruefbericht_{auftrag_id}.pdf"
+        )
+        
+    except Exception as e:
+        logger.error(f"Fehler bei Berichtsgenerierung: {e}")
+        raise HTTPException(status_code=500, detail="Interner Serverfehler")
+
