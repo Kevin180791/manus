@@ -2,8 +2,11 @@
 TGA Router - API-Endpunkte für die TGA-Planprüfung
 """
 
-from fastapi import APIRouter, HTTPException, UploadFile, File, Form
-from typing import List, Optional, Dict, Any
+import logging
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Depends
+from fastapi.responses import FileResponse
+from typing import List, Optional
+from sqlalchemy.orm import Session
 from pydantic import BaseModel
 import uuid
 from datetime import datetime
@@ -11,18 +14,22 @@ import os
 import shutil
 
 from agent_core.tga_coordinator import (
-    TGACoordinator, 
-    PruefAuftrag, 
-    Document, 
-    ProjectType, 
-    LeistungsPhase, 
+    TGACoordinator,
+    PruefAuftrag,
+    Document,
+    ProjectType,
+    LeistungsPhase,
     GewerkeType
 )
+
+from database import get_db
 
 router = APIRouter()
 
 # Globale Instanz des TGA Coordinators
 tga_coordinator = TGACoordinator()
+
+logger = logging.getLogger(__name__)
 
 # Pydantic Models für API
 class ProjectRequest(BaseModel):
@@ -202,33 +209,6 @@ async def get_pruefung_ergebnisse(auftrag_id: str):
         "befunde": ergebnisse
     }
 
-@router.get("/pruefung/bericht/{auftrag_id}")
-async def generiere_pruefbericht(auftrag_id: str):
-    """
-    Generiert einen PDF-Prüfbericht
-    """
-    # Hole Ergebnisse
-    ergebnisse = tga_coordinator.get_ergebnisse(auftrag_id)
-    status = tga_coordinator.get_status(auftrag_id)
-    
-    if "error" in status:
-        raise HTTPException(status_code=404, detail="Auftrag nicht gefunden")
-    
-    # Hier würde PDF-Generierung implementiert
-    bericht_data = {
-        "auftrag_id": auftrag_id,
-        "projekt_name": status["projekt_name"],
-        "erstellt_am": datetime.now().isoformat(),
-        "zusammenfassung": {
-            "anzahl_dokumente": status["anzahl_dokumente"],
-            "anzahl_befunde": status["anzahl_befunde"],
-            "befunde_nach_prioritaet": status["befunde_nach_prioritaet"]
-        },
-        "befunde": ergebnisse
-    }
-    
-    return bericht_data
-
 @router.get("/gewerke")
 async def get_verfuegbare_gewerke():
     """
@@ -320,39 +300,68 @@ def _get_leistungsphase_beschreibung(phase: LeistungsPhase) -> str:
 
 
 @router.get("/pruefung/bericht/{auftrag_id}")
-async def generiere_bericht(
+async def generiere_pruefbericht(
     auftrag_id: str,
+    download: bool = False,
     db: Session = Depends(get_db)
 ):
-    """Generiert einen PDF-Bericht für eine Prüfung"""
+    """Gibt Berichtsdaten zurück und bietet optional einen PDF-Download an."""
     try:
-        from services.bericht_service import BerichtService
-        from fastapi.responses import FileResponse
-        
-        bericht_service = BerichtService(db)
-        
-        # Prüfe ob Bericht bereits existiert
-        existing_path = bericht_service.hole_bericht_pfad(auftrag_id)
-        if existing_path:
+        status = tga_coordinator.get_status(auftrag_id)
+        if "error" in status:
+            raise HTTPException(status_code=404, detail="Auftrag nicht gefunden")
+
+        ergebnisse = tga_coordinator.get_ergebnisse(auftrag_id) or []
+
+        if download:
+            from services.bericht_service import BerichtService
+
+            bericht_service = BerichtService(db)
+
+            existing_path = bericht_service.hole_bericht_pfad(auftrag_id)
+            if existing_path:
+                return FileResponse(
+                    existing_path,
+                    media_type="application/pdf",
+                    filename=f"pruefbericht_{auftrag_id}.pdf"
+                )
+
+            bericht_path = bericht_service.generiere_pruefbericht(auftrag_id)
+            if not bericht_path:
+                raise HTTPException(
+                    status_code=404,
+                    detail="Prüfauftrag nicht gefunden oder Bericht konnte nicht erstellt werden"
+                )
+
             return FileResponse(
-                existing_path,
-                media_type='application/pdf',
+                bericht_path,
+                media_type="application/pdf",
                 filename=f"pruefbericht_{auftrag_id}.pdf"
             )
-        
-        # Generiere neuen Bericht
-        bericht_path = bericht_service.generiere_pruefbericht(auftrag_id)
-        
-        if not bericht_path:
-            raise HTTPException(status_code=404, detail="Prüfauftrag nicht gefunden oder Bericht konnte nicht erstellt werden")
-        
-        return FileResponse(
-            bericht_path,
-            media_type='application/pdf',
-            filename=f"pruefbericht_{auftrag_id}.pdf"
-        )
-        
-    except Exception as e:
-        logger.error(f"Fehler bei Berichtsgenerierung: {e}")
+
+        bericht_data = {
+            "auftrag_id": auftrag_id,
+            "projekt_name": status.get("projekt_name"),
+            "erstellt_am": datetime.now().isoformat(),
+            "zusammenfassung": {
+                "anzahl_dokumente": status.get("anzahl_dokumente"),
+                "anzahl_befunde": status.get("anzahl_befunde"),
+                "befunde_nach_prioritaet": status.get("befunde_nach_prioritaet")
+            },
+            "befunde": ergebnisse
+        }
+
+        if not ergebnisse:
+            bericht_data["status"] = status.get("status")
+            bericht_data["message"] = (
+                "Prüfung noch nicht abgeschlossen oder keine Befunde gefunden"
+            )
+
+        return bericht_data
+
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("Fehler bei Berichtsgenerierung")
         raise HTTPException(status_code=500, detail="Interner Serverfehler")
 
