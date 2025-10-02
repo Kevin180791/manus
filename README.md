@@ -73,6 +73,19 @@ npm install
 npm start
 ```
 
+### Tests für die Regelwerke:
+Die automatisierten Prüflogiken lassen sich mit `pytest` gegen minimal aufgebaute Kontexte testen. Die wichtigsten Befehle für die lokale Ausführung sind:
+
+```bash
+# alle Gewerke-Regeln überprüfen
+pytest -q backend/tests
+
+# deterministische Fallbacks (Embeddings, LLM) aktivieren
+TEST_MODE=1 pytest -q backend/tests
+```
+
+Die Test-Suite ruft die jeweiligen `evaluate`-Funktionen pro Gewerk (Heizung, Lüftung, Elektro, Sprinkler, Gebäudeautomation) direkt auf und prüft sowohl Positiv- als auch Negativfälle für jede Regel.
+
 ## API-Endpunkte
 
 ### Projekt-Management:
