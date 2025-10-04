@@ -46,7 +46,7 @@ def evaluate(context: Mapping[str, Any]) -> List[Finding]:
         hot_temp = system.get("hot_water_temp")
         findings.extend(
             guard(
-                hot_temp is not None and float(hot_temp) >= params["hot_water_temp_min"],
+                hot_temp is None or float(hot_temp) >= params["hot_water_temp_min"],
                 lambda: Finding(
                     id=f"kg410_{label}_temp",
                     kategorie="technisch",
@@ -60,6 +60,26 @@ def evaluate(context: Mapping[str, Any]) -> List[Finding]:
                     norm_referenz="TrinkwV, DVGW W 551",
                     empfehlung="Warmwasserbereitung auf mindestens 55 °C einstellen und dokumentieren.",
                     konfidenz_score=0.85,
+                    dokument_id=dokument_id,
+                ),
+            )
+        )
+
+        findings.extend(
+            guard(
+                hot_temp is not None,
+                lambda: Finding(
+                    id=f"kg410_{label}_temp_missing",
+                    kategorie="hinweis",
+                    prioritaet="niedrig",
+                    titel="Keine Warmwassertemperatur dokumentiert",
+                    beschreibung=(
+                        f"Für das System {label} liegt keine dokumentierte Trinkwarmwassertemperatur vor."
+                        " Bitte Messwert nachreichen oder Monitoring ergänzen."
+                    ),
+                    gewerk=GEWERK,
+                    empfehlung="Temperaturaufzeichnungen ergänzen und Prüfprotokolle aktualisieren.",
+                    konfidenz_score=0.4,
                     dokument_id=dokument_id,
                 ),
             )
