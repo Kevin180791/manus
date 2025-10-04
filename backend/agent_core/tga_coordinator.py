@@ -108,7 +108,17 @@ class TGACoordinator:
     """
     Zentraler Coordinator für den TGA-Planprüfungs-Workflow
     """
-    
+
+    _MANDATORY_LEGEND_KEYWORDS = {
+        GewerkeType.KG410_SANITAER: {"kaltwasser", "warmwasser", "abwasser"},
+        GewerkeType.KG420_HEIZUNG: {"vorlauf", "rücklauf", "heizkörper"},
+        GewerkeType.KG430_LUEFTUNG: {"zuluft", "abluft", "fortluft"},
+        GewerkeType.KG440_ELEKTRO: {"steckdose", "beleuchtung", "hauptverteilung"},
+        GewerkeType.KG450_KOMMUNIKATION: {"daten", "kommunikation", "netzwerk"},
+        GewerkeType.KG474_FEUERLOESCHUNG: {"sprinkler", "hydrant", "brandmelder"},
+        GewerkeType.KG480_AUTOMATION: {"sensor", "aktor", "steuerung"},
+    }
+
     def __init__(self):
         self.aktive_auftraege: Dict[str, PruefAuftrag] = {}
         self.ergebnisse: Dict[str, List[Finding]] = {}
@@ -177,16 +187,27 @@ class TGACoordinator:
         """Extrahiert Metadaten aus Planköpfen und Deckblättern"""
         # Hier würde OCR/PDF-Parsing implementiert
         logger.info(f"Extrahiere Metadaten aus: {dokument.filename}")
-        
-        # Placeholder für Metadaten-Extraktion
-        dokument.metadaten = {
-            "plan_nummer": "TGA-001",
-            "revision": "Rev. 01",
-            "massstab": "1:100",
-            "erstellt_von": "Planungsbüro XY",
-            "geprueft_von": "Ing. Mustermann",
-            "datum": "2024-01-15"
-        }
+
+        parser_metadata = self._parser.extract_metadata(dokument.file_path)
+        legend_data = self._parser.extract_legend(dokument.file_path)
+
+        metadaten = dict(dokument.metadaten or {})
+        metadaten.update(parser_metadata)
+
+        if legend_data:
+            metadaten["legende"] = legend_data
+
+        if not metadaten:
+            metadaten = {
+                "plan_nummer": "TGA-001",
+                "revision": "Rev. 01",
+                "massstab": "1:100",
+                "erstellt_von": "Planungsbüro XY",
+                "geprueft_von": "Ing. Mustermann",
+                "datum": "2024-01-15",
+            }
+
+        dokument.metadaten = metadaten
     
     async def _pruefe_planliste(self, dokument: Document, auftrag: PruefAuftrag):
         """Prüft Dokument gegen Planliste auf Vollständigkeit"""
@@ -209,27 +230,127 @@ class TGACoordinator:
     async def _pruefe_vdi_6026_konformitaet(self, dokument: Document, auftrag: PruefAuftrag) -> List[Finding]:
         """Prüft VDI 6026 Konformität"""
         befunde = []
-        
-        # Beispiel-Prüfung: Vollständigkeit der Legende
-        if dokument.document_type == "plan":
-            # Hier würde echte Legende-Prüfung implementiert
-            befund = Finding(
-                id=f"formal_{dokument.id}_001",
-                document_id=dokument.id,
-                gewerk=dokument.gewerk,
-                kategorie="formal",
-                prioritaet="mittel",
-                titel="Legende unvollständig",
-                beschreibung="Nicht alle verwendeten Symbole sind in der Legende erklärt",
-                norm_referenz="VDI 6026",
-                plan_referenz=dokument.filename,
-                empfehlung="Legende um fehlende Symbole ergänzen",
-                agent_quelle="formal_compliance_agent",
-                konfidenz_score=0.85
+
+        if dokument.document_type != "plan":
+            return befunde
+
+        legend_data = (dokument.metadaten or {}).get("legende")
+        if not legend_data:
+            legend_data = self._parser.extract_legend(dokument.file_path)
+            if legend_data:
+                dokument.metadaten = dokument.metadaten or {}
+                dokument.metadaten["legende"] = legend_data
+
+        mandatory_keywords = self._MANDATORY_LEGEND_KEYWORDS.get(dokument.gewerk, set())
+        if not mandatory_keywords:
+            return befunde
+
+        if not legend_data:
+            befunde.append(
+                Finding(
+                    id=f"formal_{dokument.id}_legend_hint",
+                    document_id=dokument.id,
+                    gewerk=dokument.gewerk,
+                    kategorie="formal",
+                    prioritaet="hinweis",
+                    titel="Legendenprüfung nicht möglich",
+                    beschreibung="Für den Plan konnten keine Legendendaten extrahiert werden; bitte Sichtprüfung durchführen.",
+                    norm_referenz="VDI 6026",
+                    plan_referenz=dokument.filename,
+                    empfehlung="Legende bereitstellen oder Scan-Qualität verbessern",
+                    agent_quelle="formal_compliance_agent",
+                    konfidenz_score=0.2,
+                )
             )
-            befunde.append(befund)
-        
+            return befunde
+
+        legend_terms = self._collect_legend_terms(legend_data)
+        if not legend_terms:
+            befunde.append(
+                Finding(
+                    id=f"formal_{dokument.id}_legend_hint",
+                    document_id=dokument.id,
+                    gewerk=dokument.gewerk,
+                    kategorie="formal",
+                    prioritaet="hinweis",
+                    titel="Legendenprüfung nicht möglich",
+                    beschreibung="Die extrahierte Legende enthält keine auswertbaren Symbole.",
+                    norm_referenz="VDI 6026",
+                    plan_referenz=dokument.filename,
+                    empfehlung="Legende prüfen und erforderliche Symbole ergänzen",
+                    agent_quelle="formal_compliance_agent",
+                    konfidenz_score=0.2,
+                )
+            )
+            return befunde
+
+        missing_keywords = sorted(
+            keyword
+            for keyword in mandatory_keywords
+            if not any(keyword in term for term in legend_terms)
+        )
+
+        if missing_keywords:
+            befunde.append(
+                Finding(
+                    id=f"formal_{dokument.id}_legend_missing",
+                    document_id=dokument.id,
+                    gewerk=dokument.gewerk,
+                    kategorie="formal",
+                    prioritaet="mittel",
+                    titel="Legende unvollständig",
+                    beschreibung=(
+                        "Folgende Pflichtsymbole fehlen in der Legende: "
+                        + ", ".join(sorted({kw.capitalize() for kw in missing_keywords}))
+                    ),
+                    norm_referenz="VDI 6026",
+                    plan_referenz=dokument.filename,
+                    empfehlung="Legende um die fehlenden Symbole ergänzen",
+                    agent_quelle="formal_compliance_agent",
+                    konfidenz_score=0.7,
+                )
+            )
+
         return befunde
+
+    @staticmethod
+    def _collect_legend_terms(legend_data: Any) -> List[str]:
+        terms: List[str] = []
+
+        def _add_term(value: Any) -> None:
+            if isinstance(value, str):
+                normalized = value.strip().lower()
+                if normalized:
+                    terms.append(normalized)
+
+        if isinstance(legend_data, dict):
+            if "symbole" in legend_data and isinstance(legend_data["symbole"], Iterable):
+                for entry in legend_data["symbole"]:
+                    if isinstance(entry, Mapping):
+                        for val in entry.values():
+                            _add_term(val)
+                    else:
+                        _add_term(entry)
+            else:
+                for val in legend_data.values():
+                    if isinstance(val, Iterable) and not isinstance(val, (str, bytes)):
+                        for sub_val in val:
+                            if isinstance(sub_val, Mapping):
+                                for inner_val in sub_val.values():
+                                    _add_term(inner_val)
+                            else:
+                                _add_term(sub_val)
+                    else:
+                        _add_term(val)
+        elif isinstance(legend_data, Iterable) and not isinstance(legend_data, (str, bytes)):
+            for entry in legend_data:
+                if isinstance(entry, Mapping):
+                    for val in entry.values():
+                        _add_term(val)
+                else:
+                    _add_term(entry)
+
+        return terms
     
     async def _starte_fachpruefung(self, auftrag: PruefAuftrag) -> List[Finding]:
         """Startet die gewerkespezifische Fachprüfung"""

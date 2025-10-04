@@ -7,8 +7,15 @@ import logging
 import re
 from typing import Dict, List, Optional, Tuple
 from pathlib import Path
-import PyPDF2
-import pdfplumber
+try:
+    import PyPDF2
+except ModuleNotFoundError:  # pragma: no cover - optional dependency
+    PyPDF2 = None  # type: ignore[assignment]
+
+try:
+    import pdfplumber
+except ModuleNotFoundError:  # pragma: no cover - optional dependency
+    pdfplumber = None  # type: ignore[assignment]
 
 logger = logging.getLogger(__name__)
 
@@ -33,33 +40,37 @@ class DocumentParser:
         if not self.can_parse(file_path):
             return ""
             
-        try:
-            # Versuche zuerst pdfplumber (besser für Tabellen)
-            with pdfplumber.open(file_path) as pdf:
-                text = ""
-                for page in pdf.pages:
-                    page_text = page.extract_text()
-                    if page_text:
+        if pdfplumber is not None:
+            try:
+                # Versuche zuerst pdfplumber (besser für Tabellen)
+                with pdfplumber.open(file_path) as pdf:
+                    text = ""
+                    for page in pdf.pages:
+                        page_text = page.extract_text()
+                        if page_text:
+                            text += page_text + "\n"
+
+                    if text.strip():
+                        return text
+
+            except Exception as e:
+                logger.warning(f"pdfplumber failed for {file_path}: {e}")
+
+        if PyPDF2 is not None:
+            try:
+                # Fallback auf PyPDF2
+                with open(file_path, 'rb') as file:
+                    pdf_reader = PyPDF2.PdfReader(file)
+                    text = ""
+                    for page in pdf_reader.pages:
+                        page_text = page.extract_text() or ""
                         text += page_text + "\n"
-                
-                if text.strip():
                     return text
-                    
-        except Exception as e:
-            logger.warning(f"pdfplumber failed for {file_path}: {e}")
-            
-        try:
-            # Fallback auf PyPDF2
-            with open(file_path, 'rb') as file:
-                pdf_reader = PyPDF2.PdfReader(file)
-                text = ""
-                for page in pdf_reader.pages:
-                    text += page.extract_text() + "\n"
-                return text
-                
-        except Exception as e:
-            logger.error(f"PDF parsing failed for {file_path}: {e}")
-            return ""
+
+            except Exception as e:
+                logger.error(f"PDF parsing failed for {file_path}: {e}")
+
+        return ""
     
     def extract_tables(self, file_path: str) -> List[List[str]]:
         """
@@ -70,6 +81,9 @@ class DocumentParser:
             return []
             
         tables = []
+        if pdfplumber is None:
+            return tables
+
         try:
             with pdfplumber.open(file_path) as pdf:
                 for page in pdf.pages:
@@ -83,7 +97,7 @@ class DocumentParser:
                                     clean_table.append([str(cell).strip() if cell else "" for cell in row])
                             if clean_table:
                                 tables.append(clean_table)
-                                
+
         except Exception as e:
             logger.error(f"Table extraction failed for {file_path}: {e}")
             
@@ -312,6 +326,60 @@ class DocumentParser:
             metadata['massstab'] = f"1:{massstab_match.group(1)}"
         
         return metadata
+
+    def extract_legend(self, file_path: str) -> Dict:
+        """Extrahiert Legenden-Einträge aus einem Plan"""
+        text = self.extract_text(file_path)
+        if not text:
+            return {}
+
+        legend_entries: List[Dict[str, str]] = []
+        lines = text.splitlines()
+        in_legend_section = False
+        legend_markers = {"legende", "symbolverzeichnis", "zeichen"}
+
+        for raw_line in lines:
+            line = raw_line.strip()
+            if not line:
+                if in_legend_section and legend_entries:
+                    break
+                continue
+
+            normalized = line.lower()
+            if any(marker in normalized for marker in legend_markers):
+                in_legend_section = True
+                continue
+
+            if not in_legend_section:
+                continue
+
+            match = re.match(r"([A-Za-z0-9/\\+\-]+)\s*[-–:]+\s*(.+)", line)
+            if match:
+                legend_entries.append(
+                    {
+                        "symbol": match.group(1).strip(),
+                        "beschreibung": match.group(2).strip(),
+                    }
+                )
+                continue
+
+            parts = re.split(r"\s{2,}", line)
+            if len(parts) >= 2:
+                legend_entries.append(
+                    {
+                        "symbol": parts[0].strip(),
+                        "beschreibung": parts[1].strip(),
+                    }
+                )
+                continue
+
+            if legend_entries:
+                break
+
+        if legend_entries:
+            return {"symbole": legend_entries}
+
+        return {}
 
 # Einfache Testfunktion
 def test_parser():
