@@ -1095,65 +1095,545 @@ class TGACoordinator:
     
     async def _pruefe_kollisionen(self, auftrag: PruefAuftrag) -> List[Finding]:
         """Prüft auf geometrische Kollisionen zwischen Gewerken"""
-        befunde = []
-        
-        # Beispiel-Kollisionsprüfung
-        befund = Finding(
-            id="kollision_001",
-            document_id="",
-            gewerk=GewerkeType.KG430_LUEFTUNG,
-            kategorie="koordination",
-            prioritaet="hoch",
-            titel="Potenzielle Kollision Lüftungskanal/Elektrotrasse",
-            beschreibung="Lüftungskanal und Elektrotrasse kreuzen sich im gleichen Höhenniveau",
-            plan_referenz="Koordinationsplan EG",
-            empfehlung="Höhenkoordination zwischen Lüftung und Elektro abstimmen",
-            agent_quelle="coordination_agent",
-            konfidenz_score=0.75
-        )
-        befunde.append(befund)
-        
+        geometrie_eintraege: List[Dict[str, Any]] = []
+
+        def _to_float(value: Any) -> Optional[float]:
+            if value is None:
+                return None
+            if isinstance(value, (int, float)):
+                return float(value)
+            try:
+                return float(str(value).replace(",", "."))
+            except (TypeError, ValueError):
+                return None
+
+        def _normiere_bbox(raw_bbox: Mapping[str, Any]) -> Optional[Dict[str, float]]:
+            def _pair(min_keys: Iterable[str], max_keys: Iterable[str], origin_keys: Iterable[str], size_keys: Iterable[str]) -> Optional[Tuple[float, float]]:
+                min_value: Optional[float] = None
+                max_value: Optional[float] = None
+
+                for key in min_keys:
+                    if key in raw_bbox:
+                        min_value = _to_float(raw_bbox[key])
+                        break
+
+                for key in max_keys:
+                    if key in raw_bbox:
+                        max_value = _to_float(raw_bbox[key])
+                        break
+
+                if min_value is None or max_value is None:
+                    origin_value: Optional[float] = None
+                    size_value: Optional[float] = None
+                    for key in origin_keys:
+                        if key in raw_bbox:
+                            origin_value = _to_float(raw_bbox[key])
+                            break
+                    for key in size_keys:
+                        if key in raw_bbox:
+                            size_value = _to_float(raw_bbox[key])
+                            break
+                    if origin_value is None or size_value is None:
+                        return None
+                    min_value = origin_value
+                    max_value = origin_value + size_value
+
+                if min_value is None or max_value is None:
+                    return None
+
+                if min_value > max_value:
+                    min_value, max_value = max_value, min_value
+                return (min_value, max_value)
+
+            x_pair = _pair(
+                ("x_min", "xmin"),
+                ("x_max", "xmax"),
+                ("x", "origin_x"),
+                ("width", "breite", "dx"),
+            )
+            y_pair = _pair(
+                ("y_min", "ymin"),
+                ("y_max", "ymax"),
+                ("y", "origin_y"),
+                ("depth", "tiefe", "dy", "laenge"),
+            )
+            z_pair = _pair(
+                ("z_min", "zmin"),
+                ("z_max", "zmax"),
+                ("z", "origin_z", "niveau"),
+                ("height", "hoehe", "dz"),
+            )
+
+            if x_pair is None or y_pair is None:
+                return None
+
+            z_min, z_max = (0.0, 0.0) if z_pair is None else z_pair
+
+            return {
+                "x_min": x_pair[0],
+                "x_max": x_pair[1],
+                "y_min": y_pair[0],
+                "y_max": y_pair[1],
+                "z_min": z_min,
+                "z_max": z_max,
+            }
+
+        for dokument in auftrag.dokumente:
+            metadata = dokument.metadaten or {}
+            geometrie = metadata.get("geometrie") or {}
+            elemente = geometrie.get("elemente") or []
+
+            for element in elemente:
+                bbox_raw = element.get("bbox") or element.get("bounding_box") or {}
+                if not isinstance(bbox_raw, Mapping):
+                    continue
+                bbox = _normiere_bbox(bbox_raw)
+                if not bbox:
+                    continue
+
+                geometrie_eintraege.append(
+                    {
+                        "dokument": dokument,
+                        "element": element,
+                        "bbox": bbox,
+                        "level": element.get("level") or geometrie.get("level") or metadata.get("geschoss"),
+                        "plan_ref": element.get("plan_ref")
+                        or geometrie.get("plan_ref")
+                        or dokument.plan_nummer
+                        or dokument.filename,
+                    }
+                )
+
+        befunde: List[Finding] = []
+
+        def _ueberlappung(a: Mapping[str, float], b: Mapping[str, float]) -> Optional[Dict[str, float]]:
+            def _axis_overlap(min_a: float, max_a: float, min_b: float, max_b: float) -> Optional[Tuple[float, float]]:
+                start = max(min_a, min_b)
+                end = min(max_a, max_b)
+                if end <= start:
+                    return None
+                return (start, end)
+
+            x_overlap = _axis_overlap(a["x_min"], a["x_max"], b["x_min"], b["x_max"])
+            y_overlap = _axis_overlap(a["y_min"], a["y_max"], b["y_min"], b["y_max"])
+            if not x_overlap or not y_overlap:
+                return None
+
+            z_overlap = _axis_overlap(a.get("z_min", 0.0), a.get("z_max", 0.0), b.get("z_min", 0.0), b.get("z_max", 0.0))
+            if z_overlap is None:
+                # Falls keine Höhenangaben vorhanden sind, wird Überschneidung in 2D angenommen
+                if a.get("z_max") == a.get("z_min") == 0.0 and b.get("z_max") == b.get("z_min") == 0.0:
+                    z_overlap = (0.0, 0.0)
+                else:
+                    return None
+
+            return {
+                "x": x_overlap[1] - x_overlap[0],
+                "y": y_overlap[1] - y_overlap[0],
+                "z": z_overlap[1] - z_overlap[0],
+            }
+
+        for index, eintrag_a in enumerate(geometrie_eintraege):
+            for eintrag_b in geometrie_eintraege[index + 1 :]:
+                dokument_a: Document = eintrag_a["dokument"]
+                dokument_b: Document = eintrag_b["dokument"]
+
+                if dokument_a.gewerk == dokument_b.gewerk:
+                    continue
+
+                level_a = eintrag_a.get("level")
+                level_b = eintrag_b.get("level")
+                if level_a and level_b and str(level_a).lower() != str(level_b).lower():
+                    continue
+
+                overlap = _ueberlappung(eintrag_a["bbox"], eintrag_b["bbox"])
+                if not overlap:
+                    continue
+
+                flaechenueberdeckung = overlap["x"] * overlap["y"]
+                if flaechenueberdeckung <= 0:
+                    continue
+
+                element_a = eintrag_a["element"]
+                element_b = eintrag_b["element"]
+
+                beschreibung = (
+                    f"Element {element_a.get('id') or element_a.get('name')} ({dokument_a.gewerk.value}) "
+                    f"überlappt mit {element_b.get('id') or element_b.get('name')} "
+                    f"({dokument_b.gewerk.value}). Überdeckung: {flaechenueberdeckung:.2f} m²"
+                )
+
+                if overlap["z"] > 0:
+                    beschreibung += f" bei einer vertikalen Überschneidung von {overlap['z']:.2f} m"
+
+                plan_ref = f"{eintrag_a['plan_ref']} / {eintrag_b['plan_ref']}"
+
+                befunde.append(
+                    Finding(
+                        id=f"kollision_{dokument_a.id}_{element_a.get('id')}_{dokument_b.id}_{element_b.get('id')}",
+                        document_id=dokument_a.id,
+                        gewerk=dokument_a.gewerk,
+                        kategorie="koordination",
+                        prioritaet="hoch",
+                        titel="Geometrische Kollision zwischen Gewerken",
+                        beschreibung=beschreibung,
+                        plan_referenz=plan_ref,
+                        empfehlung="Koordinationsmodell prüfen und Höhenlage abstimmen",
+                        agent_quelle="coordination_agent",
+                        konfidenz_score=0.85,
+                    )
+                )
+
         return befunde
-    
+
     async def _pruefe_schnittstellen(self, auftrag: PruefAuftrag) -> List[Finding]:
         """Prüft Schnittstellen zwischen Gewerken"""
-        befunde = []
-        
-        # Beispiel: Heizung-Elektro Schnittstelle
-        befund = Finding(
-            id="schnittstelle_001",
-            document_id="",
-            gewerk=GewerkeType.KG420_HEIZUNG,
-            kategorie="koordination",
-            prioritaet="mittel",
-            titel="Elektrische Anschlussleistung Wärmepumpe",
-            beschreibung="Anschlussleistung der Wärmepumpe muss mit Elektroplanung abgestimmt werden",
-            empfehlung="Lastangaben zwischen Heizung und Elektro abstimmen",
-            agent_quelle="coordination_agent",
-            konfidenz_score=0.92
-        )
-        befunde.append(befund)
-        
+        befunde: List[Finding] = []
+
+        def _to_float(value: Any) -> Optional[float]:
+            if value is None:
+                return None
+            if isinstance(value, (int, float)):
+                return float(value)
+            try:
+                return float(str(value).replace(",", "."))
+            except (TypeError, ValueError):
+                return None
+
+        elektro_schnittstellen: Dict[str, Dict[str, Any]] = {}
+        heizung_schnittstellen: List[Dict[str, Any]] = []
+
+        for dokument in auftrag.dokumente:
+            metadata = dokument.metadaten or {}
+            schnittstellen = metadata.get("schnittstellen") or {}
+
+            if dokument.gewerk == GewerkeType.KG440_ELEKTRO:
+                for eintrag in schnittstellen.get("versorgungen", []):
+                    if not isinstance(eintrag, Mapping):
+                        continue
+                    referenz = str(
+                        eintrag.get("referenz")
+                        or eintrag.get("kreis")
+                        or eintrag.get("id")
+                        or eintrag.get("name")
+                        or ""
+                    ).strip()
+                    if not referenz:
+                        continue
+                    kapazitaet = _to_float(
+                        eintrag.get("kapazitaet_kw")
+                        or eintrag.get("leistung_kw")
+                        or eintrag.get("anschlussleistung_kw")
+                        or eintrag.get("kapazitaet")
+                    )
+                    elektro_schnittstellen[referenz.lower()] = {
+                        "kapazitaet": kapazitaet,
+                        "plan_ref": eintrag.get("plan_ref")
+                        or metadata.get("plan_ref")
+                        or dokument.plan_nummer
+                        or dokument.filename,
+                        "dokument": dokument,
+                    }
+
+            if dokument.gewerk == GewerkeType.KG420_HEIZUNG:
+                for eintrag in schnittstellen.get("elektro", []):
+                    if not isinstance(eintrag, Mapping):
+                        continue
+                    heizung_schnittstellen.append(
+                        {
+                            "eintrag": eintrag,
+                            "dokument": dokument,
+                            "leistung": _to_float(
+                                eintrag.get("leistung_kw")
+                                or eintrag.get("anschlussleistung_kw")
+                                or eintrag.get("leistung")
+                            ),
+                            "versorgung": str(
+                                eintrag.get("versorgung")
+                                or eintrag.get("kreis")
+                                or eintrag.get("referenz")
+                                or ""
+                            ).strip(),
+                            "plan_ref": eintrag.get("plan_ref")
+                            or metadata.get("plan_ref")
+                            or dokument.plan_nummer
+                            or dokument.filename,
+                        }
+                    )
+
+        for entry in heizung_schnittstellen:
+            dokument = entry["dokument"]
+            leistung = entry["leistung"]
+            versorgung = entry["versorgung"].lower()
+
+            if not versorgung:
+                befunde.append(
+                    Finding(
+                        id=f"schnittstelle_{dokument.id}_ohne_zuordnung",
+                        document_id=dokument.id,
+                        gewerk=dokument.gewerk,
+                        kategorie="koordination",
+                        prioritaet="mittel",
+                        titel="Heizungsanschluss ohne Elektro-Zuordnung",
+                        beschreibung="Für einen Heizungsanschluss konnte kein zugehöriger Elektro-Stromkreis identifiziert werden.",
+                        empfehlung="Versorgungskreis in Heizungs- und Elektroplanung eindeutig referenzieren",
+                        plan_referenz=entry["plan_ref"],
+                        agent_quelle="coordination_agent",
+                        konfidenz_score=0.75,
+                    )
+                )
+                continue
+
+            elektro = elektro_schnittstellen.get(versorgung)
+            if elektro is None:
+                befunde.append(
+                    Finding(
+                        id=f"schnittstelle_{dokument.id}_{versorgung}_fehlt",
+                        document_id=dokument.id,
+                        gewerk=dokument.gewerk,
+                        kategorie="koordination",
+                        prioritaet="mittel",
+                        titel="Versorgungskreis in Elektroplanung fehlt",
+                        beschreibung=(
+                            f"Für den Heizungsanschluss '{versorgung}' konnte kein entsprechender Elektro-Stromkreis gefunden werden."
+                        ),
+                        empfehlung="Heizungs- und Elektroplanung auf Konsistenz prüfen",
+                        plan_referenz=entry["plan_ref"],
+                        agent_quelle="coordination_agent",
+                        konfidenz_score=0.8,
+                    )
+                )
+                continue
+
+            if leistung is None or leistung <= 0:
+                continue
+
+            kapazitaet = elektro.get("kapazitaet")
+            if kapazitaet is None:
+                befunde.append(
+                    Finding(
+                        id=f"schnittstelle_{dokument.id}_{versorgung}_unbekannt",
+                        document_id=dokument.id,
+                        gewerk=dokument.gewerk,
+                        kategorie="koordination",
+                        prioritaet="mittel",
+                        titel="Fehlende Kapazitätsangabe Elektro",
+                        beschreibung=(
+                            f"Für den Elektro-Stromkreis '{versorgung}' ist keine Kapazität dokumentiert; Heizlast {leistung:.1f} kW kann nicht verifiziert werden."
+                        ),
+                        empfehlung="Kapazität in Elektroplanung nachtragen",
+                        plan_referenz=f"{entry['plan_ref']} / {elektro['plan_ref']}",
+                        agent_quelle="coordination_agent",
+                        konfidenz_score=0.7,
+                    )
+                )
+                continue
+
+            if kapazitaet + 1e-6 < leistung:
+                differenz = leistung - kapazitaet
+                befunde.append(
+                    Finding(
+                        id=f"schnittstelle_{dokument.id}_{versorgung}_unterdimensioniert",
+                        document_id=dokument.id,
+                        gewerk=dokument.gewerk,
+                        kategorie="koordination",
+                        prioritaet="hoch",
+                        titel="Elektrische Leistung für Wärmeerzeuger unzureichend",
+                        beschreibung=(
+                            f"Der zugewiesene Elektro-Stromkreis '{versorgung}' stellt {kapazitaet:.1f} kW bereit,"
+                            f" benötigt werden jedoch {leistung:.1f} kW. Differenz: {differenz:.1f} kW."
+                        ),
+                        empfehlung="Stromkreisleistung erhöhen oder zusätzlichen Kreis vorsehen",
+                        plan_referenz=f"{entry['plan_ref']} / {elektro['plan_ref']}",
+                        agent_quelle="coordination_agent",
+                        konfidenz_score=0.9,
+                    )
+                )
+
         return befunde
-    
+
     async def _pruefe_sud_planung(self, auftrag: PruefAuftrag) -> List[Finding]:
         """Prüft Schlitz- und Durchbruchsplanung"""
-        befunde = []
-        
-        befund = Finding(
-            id="sud_001",
-            document_id="",
-            gewerk=GewerkeType.KG410_SANITAER,
-            kategorie="koordination",
-            prioritaet="hoch",
-            titel="SuD-Planung unvollständig",
-            beschreibung="Schlitz- und Durchbruchsplanung für Sanitärleitungen fehlt",
-            empfehlung="SuD-Pläne erstellen und mit Tragwerksplanung abstimmen",
-            agent_quelle="coordination_agent",
-            konfidenz_score=0.88
-        )
-        befunde.append(befund)
-        
+        befunde: List[Finding] = []
+
+        def _to_float(value: Any) -> Optional[float]:
+            if value is None:
+                return None
+            if isinstance(value, (int, float)):
+                return float(value)
+            try:
+                return float(str(value).replace(",", "."))
+            except (TypeError, ValueError):
+                return None
+
+        def _parse_dimensions(data: Mapping[str, Any]) -> Optional[Tuple[float, float]]:
+            breite = _to_float(data.get("breite") or data.get("width"))
+            hoehe = _to_float(data.get("hoehe") or data.get("height"))
+            durchmesser = _to_float(data.get("durchmesser") or data.get("diameter"))
+
+            if durchmesser is not None and (breite is None or hoehe is None):
+                return (durchmesser, durchmesser)
+
+            if breite is None or hoehe is None:
+                return None
+
+            return (breite, hoehe)
+
+        def _parse_position(data: Mapping[str, Any]) -> Optional[Tuple[float, float]]:
+            x = _to_float(data.get("x") or data.get("pos_x"))
+            y = _to_float(data.get("y") or data.get("pos_y"))
+            if x is None or y is None:
+                return None
+            return (x, y)
+
+        anforderungen: List[Dict[str, Any]] = []
+        bestaetigungen: Dict[str, List[Dict[str, Any]]] = {}
+
+        for dokument in auftrag.dokumente:
+            metadata = dokument.metadaten or {}
+            sud = metadata.get("sud") or {}
+
+            for anforderung in sud.get("anforderungen", []):
+                if not isinstance(anforderung, Mapping):
+                    continue
+                ident = str(anforderung.get("id") or anforderung.get("referenz") or "").strip()
+                if not ident:
+                    continue
+                anforderungen.append(
+                    {
+                        "id": ident,
+                        "dokument": dokument,
+                        "plan_ref": anforderung.get("plan_ref")
+                        or sud.get("plan_ref")
+                        or dokument.plan_nummer
+                        or dokument.filename,
+                        "geschoss": anforderung.get("geschoss") or metadata.get("geschoss"),
+                        "dimensionen": _parse_dimensions(anforderung.get("dimensionen") or anforderung),
+                        "position": _parse_position(anforderung.get("lage") or anforderung),
+                    }
+                )
+
+            for bestaetigung in sud.get("bestaetigt", []):
+                if not isinstance(bestaetigung, Mapping):
+                    continue
+                ident = str(
+                    bestaetigung.get("referenz")
+                    or bestaetigung.get("id")
+                    or bestaetigung.get("zuordnung")
+                    or ""
+                ).strip()
+                if not ident:
+                    continue
+                bestaetigungen.setdefault(ident.lower(), []).append(
+                    {
+                        "dokument": dokument,
+                        "plan_ref": bestaetigung.get("plan_ref")
+                        or sud.get("plan_ref")
+                        or dokument.plan_nummer
+                        or dokument.filename,
+                        "geschoss": bestaetigung.get("geschoss") or metadata.get("geschoss"),
+                        "dimensionen": _parse_dimensions(bestaetigung.get("dimensionen") or bestaetigung),
+                        "position": _parse_position(bestaetigung.get("lage") or bestaetigung),
+                        "status": bestaetigung.get("status"),
+                    }
+                )
+
+        for anforderung in anforderungen:
+            ident = anforderung["id"].lower()
+            dokument = anforderung["dokument"]
+            passende_bestaetigungen = bestaetigungen.get(ident, [])
+
+            if not passende_bestaetigungen:
+                befunde.append(
+                    Finding(
+                        id=f"sud_{dokument.id}_{ident}_fehlend",
+                        document_id=dokument.id,
+                        gewerk=dokument.gewerk,
+                        kategorie="koordination",
+                        prioritaet="hoch",
+                        titel="SuD-Durchbruch nicht bestätigt",
+                        beschreibung="Für die angeforderte Öffnung liegt kein bestätigter Schlitz- und Durchbruchsplan vor.",
+                        empfehlung="Öffnung in SuD-Plan aufnehmen und mit Tragwerksplanung abstimmen",
+                        plan_referenz=anforderung["plan_ref"],
+                        agent_quelle="coordination_agent",
+                        konfidenz_score=0.85,
+                    )
+                )
+                continue
+
+            bestaetigung = passende_bestaetigungen[0]
+
+            if anforderung.get("geschoss") and bestaetigung.get("geschoss"):
+                if str(anforderung["geschoss"]).lower() != str(bestaetigung["geschoss"]).lower():
+                    befunde.append(
+                        Finding(
+                            id=f"sud_{dokument.id}_{ident}_geschoss",
+                            document_id=dokument.id,
+                            gewerk=dokument.gewerk,
+                            kategorie="koordination",
+                            prioritaet="mittel",
+                            titel="SuD-Durchbruch falsches Geschoss",
+                            beschreibung=(
+                                "Die bestätigte Öffnung befindet sich in einem anderen Geschoss als angefordert."
+                            ),
+                            empfehlung="Geschosslage zwischen Planungsteams abstimmen",
+                            plan_referenz=f"{anforderung['plan_ref']} / {bestaetigung['plan_ref']}",
+                            agent_quelle="coordination_agent",
+                            konfidenz_score=0.75,
+                        )
+                    )
+                    continue
+
+            soll_dim = anforderung.get("dimensionen")
+            ist_dim = bestaetigung.get("dimensionen")
+            if soll_dim and ist_dim:
+                delta_breite = abs(soll_dim[0] - ist_dim[0])
+                delta_hoehe = abs(soll_dim[1] - ist_dim[1])
+                toleranz = max(0.02, 0.1 * max(soll_dim))
+                if delta_breite > toleranz or delta_hoehe > toleranz:
+                    befunde.append(
+                        Finding(
+                            id=f"sud_{dokument.id}_{ident}_abmessung",
+                            document_id=dokument.id,
+                            gewerk=dokument.gewerk,
+                            kategorie="koordination",
+                            prioritaet="mittel",
+                            titel="SuD-Abmessungen weichen ab",
+                            beschreibung=(
+                                f"Angefordert {soll_dim[0]:.2f} x {soll_dim[1]:.2f} m, bestätigt {ist_dim[0]:.2f} x {ist_dim[1]:.2f} m."
+                            ),
+                            empfehlung="Abmessungen zwischen TGA und Tragwerk abstimmen",
+                            plan_referenz=f"{anforderung['plan_ref']} / {bestaetigung['plan_ref']}",
+                            agent_quelle="coordination_agent",
+                            konfidenz_score=0.8,
+                        )
+                    )
+                    continue
+
+            soll_pos = anforderung.get("position")
+            ist_pos = bestaetigung.get("position")
+            if soll_pos and ist_pos:
+                delta_x = abs(soll_pos[0] - ist_pos[0])
+                delta_y = abs(soll_pos[1] - ist_pos[1])
+                if delta_x > 0.1 or delta_y > 0.1:
+                    befunde.append(
+                        Finding(
+                            id=f"sud_{dokument.id}_{ident}_lage",
+                            document_id=dokument.id,
+                            gewerk=dokument.gewerk,
+                            kategorie="koordination",
+                            prioritaet="mittel",
+                            titel="SuD-Lageabweichung",
+                            beschreibung=(
+                                f"Lageabweichung von {delta_x:.2f} m in X und {delta_y:.2f} m in Y festgestellt."
+                            ),
+                            empfehlung="Lage in Koordinationsplan korrigieren",
+                            plan_referenz=f"{anforderung['plan_ref']} / {bestaetigung['plan_ref']}",
+                            agent_quelle="coordination_agent",
+                            konfidenz_score=0.78,
+                        )
+                    )
+
         return befunde
     
     async def _bewerte_befunde(self, befunde: List[Finding]) -> List[Finding]:
