@@ -4,7 +4,7 @@ SQLAlchemy models for TGA platform
 
 from sqlalchemy import Column, String, Integer, Float, DateTime, Text, Boolean, ForeignKey, Enum as SQLEnum
 from sqlalchemy.orm import relationship
-from sqlalchemy.dialects.postgresql import UUID, JSON
+from sqlalchemy.dialects.postgresql import JSON
 from database import Base
 from datetime import datetime
 import uuid
@@ -55,6 +55,12 @@ class KategorieEnum(enum.Enum):
     TECHNISCH = "technisch"
     KOORDINATION = "koordination"
 
+
+class KnowledgeChunkTypeEnum(enum.Enum):
+    TEXT = "text"
+    TABLE = "table"
+    METRIC = "metric"
+
 # Database Models
 class Projekt(Base):
     __tablename__ = "projekte"
@@ -70,6 +76,7 @@ class Projekt(Base):
     # Relationships
     dokumente = relationship("Dokument", back_populates="projekt", cascade="all, delete-orphan")
     pruefauftraege = relationship("PruefAuftrag", back_populates="projekt", cascade="all, delete-orphan")
+    knowledge_chunks = relationship("KnowledgeChunk", back_populates="projekt", cascade="all, delete-orphan")
 
 class Dokument(Base):
     __tablename__ = "dokumente"
@@ -91,6 +98,7 @@ class Dokument(Base):
     # Relationships
     projekt = relationship("Projekt", back_populates="dokumente")
     metadaten = relationship("DokumentMetadata", back_populates="dokument", uselist=False, cascade="all, delete-orphan")
+    knowledge_chunks = relationship("KnowledgeChunk", back_populates="dokument", cascade="all, delete-orphan")
 
 class DokumentMetadata(Base):
     __tablename__ = "dokument_metadaten"
@@ -198,4 +206,24 @@ class NormReferenz(Base):
     gewerke = Column(JSON)  # Liste der relevanten Gewerke
     gebaeude_typen = Column(JSON)  # Liste der relevanten Gebäudetypen
     erstellt_am = Column(DateTime, default=datetime.utcnow)
+
+
+class KnowledgeChunk(Base):
+    __tablename__ = "knowledge_chunks"
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    projekt_id = Column(String, ForeignKey("projekte.id"), nullable=False)
+    dokument_id = Column(String, ForeignKey("dokumente.id"), nullable=False)
+    chunk_index = Column(Integer, nullable=False)
+    chunk_type = Column(SQLEnum(KnowledgeChunkTypeEnum), nullable=False)
+    chunk_text = Column(Text, nullable=False)
+    source_reference = Column(JSON)
+    embedding_model = Column(String)
+    embedding_vector = Column(Text)  # JSON-serialisierte Liste für SQLite-Kompatibilität
+    embedding_dimensions = Column(Integer)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    projekt = relationship("Projekt", back_populates="knowledge_chunks")
+    dokument = relationship("Dokument", back_populates="knowledge_chunks")
 
