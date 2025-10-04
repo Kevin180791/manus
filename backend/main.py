@@ -1,7 +1,7 @@
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from routers import agent_tasks, upload_router, flowcalc_tasks, tga_router
+from routers import agent_tasks, upload_router, flowcalc_tasks, tga_router, knowledge_router
 from database import init_db
 import logging
 
@@ -36,6 +36,7 @@ app.include_router(agent_tasks.router, prefix="/agent/tasks", tags=["Legacy Agen
 app.include_router(upload_router.router, prefix="/documents", tags=["Legacy Upload"])
 app.include_router(flowcalc_tasks.router, prefix="/agent/tasks", tags=["Legacy Flow Calc"])
 app.include_router(tga_router.router, prefix="/api/v1/tga", tags=["TGA Planprüfung"])
+app.include_router(knowledge_router.router)
 
 @app.get("/", tags=["System"])
 def root():
