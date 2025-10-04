@@ -35,7 +35,7 @@ def evaluate(context: Mapping[str, Any]) -> List[Finding]:
         gewerk_ref = str(system.get("gewerk") or "").lower()
         bacs_class = str(system.get("klasse") or "D")
         requirement = required_classes.get(gewerk_ref)
-        if requirement and _class_rank(bacs_class) > _class_rank(requirement):
+        if requirement and _class_rank(bacs_class) < _class_rank(requirement):
             findings.append(
                 Finding(
                     id=f"kg480_{gewerk_ref}_klasse",

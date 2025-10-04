@@ -29,18 +29,18 @@ def finding_ids(findings: Iterable[object]) -> set[str]:
     return {finding.id for finding in findings}  # type: ignore[attr-defined]
 
 
-def test_bacs_class_requirement_negative():
+def test_bacs_class_requirement_worse_triggers_finding():
     context = base_context()
-    context["systeme"].append({"gewerk": "kg440", "klasse": "A"})  # type: ignore[index]
+    context["systeme"].append({"gewerk": "kg440", "klasse": "C"})  # type: ignore[index]
 
     findings = evaluate(context)
 
     assert "kg480_kg440_klasse" in finding_ids(findings)
 
 
-def test_bacs_class_requirement_positive():
+def test_bacs_class_requirement_better_no_finding():
     context = base_context()
-    context["systeme"].append({"gewerk": "kg440", "klasse": "B"})  # type: ignore[index]
+    context["systeme"].append({"gewerk": "kg440", "klasse": "A"})  # type: ignore[index]
 
     findings = evaluate(context)
 
