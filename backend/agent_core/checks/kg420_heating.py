@@ -55,11 +55,9 @@ def evaluate(context: Mapping[str, Any]) -> List[Finding]:
     if total_load is None:
         total_load = 0.0
         for room in rooms:
-            value = _to_float(room.get("heizlast"))
+            value = _normalize_room_load(room.get("heizlast"), room.get("heizlast_unit"))
             if value is None:
                 continue
-            if value > 1000:  # meist W → in kW umrechnen
-                value = value / 1000
             total_load += value
 
     for room in rooms:
@@ -324,6 +322,25 @@ def _to_float(value: Optional[Any]) -> Optional[float]:
             except ValueError:
                 return None
         return None
+
+
+def _normalize_room_load(value: Optional[Any], unit: Optional[Any]) -> Optional[float]:
+    numeric = _to_float(value)
+    if numeric is None:
+        return None
+
+    if isinstance(unit, str):
+        lowered = unit.lower()
+        if lowered.startswith("mw"):
+            return numeric * 1000
+        if lowered.startswith("kw"):
+            return numeric
+        if lowered.startswith("w"):
+            return numeric / 1000
+
+    if numeric > 1000:
+        return numeric / 1000
+    return numeric
 
 
 __all__ = ["evaluate", "GEWERK"]

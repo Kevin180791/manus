@@ -89,13 +89,25 @@ def _populate_heating_load(target: MutableMapping[str, Any], data: Mapping[str, 
         entry = {
             "name": room.get("name"),
             "flaeche": room.get("flaeche"),
-            "heizlast": _normalize_heating_power(room.get("heizlast")),
+            "heizlast": _normalize_heating_power(
+                {"value": room.get("heizlast"), "unit": room.get("heizlast_unit")}
+                if room.get("heizlast_unit") is not None
+                else room.get("heizlast")
+            ),
             "spezifische_heizlast": room.get("spezifische_heizlast"),
         }
         target["rooms"].append(entry)
 
     if data.get("gesamt_heizlast") is not None:
-        target["total"] = _normalize_heating_power(data.get("gesamt_heizlast"))
+        total_input: Any
+        if data.get("gesamt_heizlast_unit") is not None:
+            total_input = {
+                "value": data.get("gesamt_heizlast"),
+                "unit": data.get("gesamt_heizlast_unit"),
+            }
+        else:
+            total_input = data.get("gesamt_heizlast")
+        target["total"] = _normalize_heating_power(total_input)
     if data.get("auslegungstemperatur") is not None:
         target["auslegung"] = data.get("auslegungstemperatur")
 
@@ -168,9 +180,40 @@ def _find_float(pattern: str, text: str) -> Optional[float]:
 
 
 def _normalize_heating_power(value: Any) -> Optional[float]:
-    numeric = _to_float(value)
+    unit: Optional[str] = None
+    raw_value: Any = value
+
+    if isinstance(value, Mapping):
+        unit_value = value.get("unit")
+        unit = str(unit_value).lower() if unit_value is not None else None
+        raw_value = value.get("value")
+    elif isinstance(value, (list, tuple)) and value:
+        raw_value = value[0]
+        if len(value) > 1 and value[1] is not None:
+            unit = str(value[1]).lower()
+    elif isinstance(value, str):
+        # Extrahiere numerischen Anteil und potentielle Einheit aus Strings wie "500 W"
+        match = re.search(r"(-?\d+(?:[.,]\d+)?)", value)
+        if match:
+            raw_value = match.group(1)
+            trailing_text = value[match.end():]
+            if trailing_text:
+                unit_match = re.search(r"(mw|kw|w)\b", trailing_text.lower())
+                if unit_match:
+                    unit = unit_match.group(1)
+
+    numeric = _to_float(raw_value)
     if numeric is None:
         return None
+
+    if unit:
+        if unit.startswith("mw"):
+            return numeric * 1000
+        if unit.startswith("kw"):
+            return numeric
+        if unit.startswith("w"):
+            return numeric / 1000
+
     if numeric > 1000:
         numeric = numeric / 1000
     return numeric

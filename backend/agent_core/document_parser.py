@@ -5,7 +5,7 @@ Einfache, funktionsfähige Implementierung ohne Overengineering
 
 import logging
 import re
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 from pathlib import Path
 try:
     import PyPDF2
@@ -115,6 +115,7 @@ class DocumentParser:
         heizlast_data = {
             'raeume': [],
             'gesamt_heizlast': None,
+            'gesamt_heizlast_unit': None,
             'auslegungstemperatur': None
         }
         
@@ -125,10 +126,11 @@ class DocumentParser:
             heizlast_data['auslegungstemperatur'] = float(temp_match.group(1).replace(',', '.'))
         
         # Suche nach Gesamtheizlast
-        gesamt_pattern = r'Gesamt.*?heizlast.*?(\d+(?:[.,]\d+)?)\s*kW'
+        gesamt_pattern = r'Gesamt.*?heizlast.*?(\d+(?:[.,]\d+)?)\s*(kW|W)'
         gesamt_match = re.search(gesamt_pattern, text, re.IGNORECASE)
         if gesamt_match:
             heizlast_data['gesamt_heizlast'] = float(gesamt_match.group(1).replace(',', '.'))
+            heizlast_data['gesamt_heizlast_unit'] = gesamt_match.group(2).upper()
         
         # Suche nach Raumdaten in Tabellen
         tables = self.extract_tables(file_path)
@@ -147,7 +149,8 @@ class DocumentParser:
         if not table or len(table) < 2:
             return []
             
-        header = [col.lower() for col in table[0]]
+        raw_header = [col or "" for col in table[0]]
+        header = [col.lower() for col in raw_header]
         raeume = []
         
         # Finde relevante Spalten
@@ -171,23 +174,46 @@ class DocumentParser:
                 
                 if heizlast_col is not None and row[heizlast_col]:
                     try:
-                        heizlast_str = re.sub(r'[^\d.,]', '', row[heizlast_col])
+                        heizlast_str = re.sub(r'[^\d.,-]', '', row[heizlast_col])
                         heizlast = float(heizlast_str.replace(',', '.'))
-                        # Konvertiere kW zu W falls nötig
-                        if heizlast < 100:  # Wahrscheinlich kW
-                            heizlast *= 1000
+                        unit = self._detect_power_unit(raw_header[heizlast_col], row[heizlast_col])
+                        if not unit:
+                            unit = 'kW'
                         raum_data['heizlast'] = heizlast
+                        raum_data['heizlast_unit'] = unit
                     except ValueError:
                         pass
-                
+
                 if raum_data and 'name' in raum_data:
                     # Berechne spezifische Heizlast
                     if 'flaeche' in raum_data and 'heizlast' in raum_data and raum_data['flaeche'] > 0:
-                        raum_data['spezifische_heizlast'] = raum_data['heizlast'] / raum_data['flaeche']
-                    
+                        heizlast_value = raum_data['heizlast']
+                        unit = raum_data.get('heizlast_unit', 'kW')
+                        if isinstance(unit, str) and unit.lower().startswith('w'):
+                            heizlast_watt = heizlast_value
+                        elif isinstance(unit, str) and unit.lower().startswith('mw'):
+                            heizlast_watt = heizlast_value * 1_000_000
+                        else:  # kW als Standard
+                            heizlast_watt = heizlast_value * 1000
+                        raum_data['spezifische_heizlast'] = heizlast_watt / raum_data['flaeche']
+
                     raeume.append(raum_data)
-        
+
         return raeume
+
+    def _detect_power_unit(self, header_value: str, cell_value: str) -> Optional[str]:
+        """Bestimmt die Leistungseinheit aus Header- oder Zelleninhalt."""
+        text = f"{header_value or ''} {cell_value or ''}".lower()
+        normalized = re.sub(r'[^a-z]', ' ', text)
+        tokens = [token for token in normalized.split() if token]
+
+        if any(token == 'mw' or token == 'megawatt' for token in tokens):
+            return 'MW'
+        if any(token == 'kw' or token == 'kilowatt' for token in tokens):
+            return 'kW'
+        if any(token == 'w' or token == 'watt' for token in tokens):
+            return 'W'
+        return None
     
     def _find_column(self, header: List[str], keywords: List[str]) -> Optional[int]:
         """Findet Spalte basierend auf Keywords"""

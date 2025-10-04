@@ -94,6 +94,32 @@ def test_specific_load_too_low_positive():
     assert "kg420_room_Raum A_niedrig" not in finding_ids(findings)
 
 
+def test_small_room_loads_in_watts_do_not_trigger_generator_warning():
+    context = base_context()
+    context["heating_load"]["rooms"] = [  # type: ignore[index]
+        {
+            "name": "Raum A",
+            "flaeche": 13.0,
+            "heizlast": 720.0,
+            "heizlast_unit": "W",
+            "spezifische_heizlast": 55.4,
+        },
+        {
+            "name": "Raum B",
+            "flaeche": 11.5,
+            "heizlast": 610.0,
+            "heizlast_unit": "W",
+            "spezifische_heizlast": 53.0,
+        },
+    ]
+    context["heating_load"]["total"] = None  # type: ignore[index]
+    context["generator"]["leistung"] = 6.0  # type: ignore[index]
+
+    findings = evaluate(context)
+
+    assert "kg420_erzeuger_001" not in finding_ids(findings)
+
+
 def test_supply_temperature_limit_negative():
     context = base_context()
     context["system"]["supply_temperature"] = 75.0  # type: ignore[index]
