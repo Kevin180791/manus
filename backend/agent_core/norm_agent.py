@@ -10,6 +10,13 @@ from dataclasses import asdict, dataclass
 from textwrap import dedent
 from typing import Optional
 
+try:  # pragma: no cover - optional dependency for Gemini support
+    import requests
+except ImportError:  # pragma: no cover - tests without requests installed
+    requests = None  # type: ignore[assignment]
+
+from backend.services.anonymization import TextSanitizer
+
 
 logger = logging.getLogger(__name__)
 
@@ -50,9 +57,13 @@ class LLMClient:
         timeout: Optional[float] = None,
         system_prompt: Optional[str] = None,
         client: Optional[object] = None,
+        sanitizer: Optional[TextSanitizer] = None,
     ) -> None:
         self.provider = (provider or os.getenv("NORM_AGENT_LLM_PROVIDER") or "openai").lower()
-        self.model = model or os.getenv("NORM_AGENT_LLM_MODEL", "gpt-4o-mini")
+        if self.provider == "gemini":
+            self.model = model or os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
+        else:
+            self.model = model or os.getenv("NORM_AGENT_LLM_MODEL", "gpt-4o-mini")
         timeout_env = os.getenv("NORM_AGENT_LLM_TIMEOUT")
         self.timeout = timeout if timeout is not None else float(timeout_env) if timeout_env else 30.0
         self.system_prompt = system_prompt or os.getenv(
@@ -60,6 +71,11 @@ class LLMClient:
             "Du bist eine erfahrene TGA-Fachingenieurin und bewertest Normkonformität.",
         )
         self._client = client
+        self.sanitizer = sanitizer or TextSanitizer()
+        self.gemini_api_key = os.getenv("GEMINI_API_KEY")
+        self.gemini_api_endpoint = os.getenv(
+            "GEMINI_API_ENDPOINT", "https://generativelanguage.googleapis.com"
+        )
 
     def _ensure_client(self) -> object:
         if self._client is not None:
@@ -77,6 +93,11 @@ class LLMClient:
 
             self._client = OpenAI(api_key=api_key)
             return self._client
+
+        if self.provider == "gemini":
+            if not self.gemini_api_key:
+                raise LLMConfigurationError("GEMINI_API_KEY ist nicht gesetzt.")
+            return object()
 
         raise LLMConfigurationError(f"Nicht unterstützter LLM-Provider: {self.provider}")
 
@@ -105,7 +126,75 @@ class LLMClient:
             except (AttributeError, IndexError) as exc:  # pragma: no cover - defensive
                 raise LLMClientError("Antwort des LLM konnte nicht interpretiert werden.") from exc
 
+        if self.provider == "gemini":
+            sanitized_prompt = self.sanitizer.sanitize(prompt)
+            if not sanitized_prompt.compliance_ok:
+                raise LLMConfigurationError(
+                    "Sanitizer konnte sensible Daten nicht vollständig entfernen. Gemini-Aufruf blockiert."
+                )
+
+            if requests is None:
+                raise LLMConfigurationError("Gemini-Provider benötigt das 'requests'-Paket.")
+
+            try:
+                response_text = self._generate_with_gemini(sanitized_prompt.sanitized_text)
+            except requests.Timeout as exc:
+                raise LLMTimeoutError("LLM Anfrage hat das Zeitlimit überschritten.") from exc
+            except requests.RequestException as exc:  # pragma: no cover - depends on network
+                mapped = _map_llm_exception(exc)
+                if mapped:
+                    raise mapped
+                raise LLMClientError("Gemini Anfrage fehlgeschlagen.") from exc
+
+            return sanitized_prompt.restore(response_text)
+
         raise LLMConfigurationError(f"Nicht unterstützter LLM-Provider: {self.provider}")
+
+    def _generate_with_gemini(self, prompt: str) -> str:
+        if requests is None:
+            raise LLMConfigurationError("Gemini-Provider benötigt das 'requests'-Paket.")
+        if not self.gemini_api_key:
+            raise LLMConfigurationError("GEMINI_API_KEY ist nicht gesetzt.")
+
+        endpoint = f"{self.gemini_api_endpoint.rstrip('/')}/v1beta/models/{self.model}:generateContent"
+        payload = {
+            "contents": [
+                {
+                    "role": "user",
+                    "parts": [{"text": prompt}],
+                }
+            ]
+        }
+
+        if self.system_prompt:
+            payload["system_instruction"] = {"parts": [{"text": self.system_prompt}]}
+
+        response = requests.post(
+            endpoint,
+            params={"key": self.gemini_api_key},
+            json=payload,
+            timeout=self.timeout,
+        )
+        if response.status_code == 429:
+            raise LLMRateLimitError("LLM Rate Limit erreicht.")
+        if response.status_code >= 400:
+            raise LLMClientError(
+                f"Gemini antwortete mit Status {response.status_code}: {response.text}"
+            )
+
+        payload_json = response.json()
+        return self._extract_gemini_text(payload_json)
+
+    @staticmethod
+    def _extract_gemini_text(payload: dict) -> str:
+        try:
+            candidates = payload.get("candidates") or []
+            first_candidate = candidates[0]
+            parts = first_candidate.get("content", {}).get("parts", [])
+            text = parts[0].get("text", "")
+            return text.strip()
+        except (IndexError, AttributeError):  # pragma: no cover - defensive
+            raise LLMClientError("Antwort des Gemini-Modells konnte nicht interpretiert werden.")
 
 
 JSON_PATTERN = re.compile(r"\{.*\}", re.DOTALL)
