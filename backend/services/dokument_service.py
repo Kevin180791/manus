@@ -10,8 +10,9 @@ from typing import List, Optional, Dict, Any
 from datetime import datetime
 import logging
 
-from models import Dokument, DokumentMetadata, GewerkeTypeEnum
-from agent_core.document_parser import DocumentParser
+from backend.models import Dokument, DokumentMetadata, GewerkeTypeEnum
+from backend.agent_core.document_parser import DocumentParser
+from backend.services.knowledge_service import KnowledgeBuilder
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +24,7 @@ class DokumentService:
         self.parser = DocumentParser()
         self.upload_dir = Path("uploads")
         self.upload_dir.mkdir(exist_ok=True)
+        self.knowledge_builder = KnowledgeBuilder(db)
     
     def speichere_dokument(
         self,
@@ -69,7 +71,12 @@ class DokumentService:
             metadaten = self._extrahiere_metadaten(dokument)
             if metadaten:
                 self.db.add(metadaten)
-            
+
+            # Knowledge-Chunks vorbereiten, bevor der Commit erfolgt
+            knowledge_chunks = self.knowledge_builder.build_chunks(dokument, metadaten)
+            if knowledge_chunks:
+                self.knowledge_builder.persist_chunks(knowledge_chunks)
+
             self.db.commit()
             self.db.refresh(dokument)
             
