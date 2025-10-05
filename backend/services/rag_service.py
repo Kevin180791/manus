@@ -1,110 +1,208 @@
-"""Services for embedding generation and knowledge retrieval support."""
+"""Embedding utilities and helpers for RAG pipelines."""
 
 from __future__ import annotations
 
-import importlib
-import importlib.util
+import hashlib
 import json
 import logging
-import os
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import Iterable, List, Optional
+
+from backend.core.config import Settings, get_settings
 
 
 logger = logging.getLogger(__name__)
 
 
 class EmbeddingServiceError(RuntimeError):
-    """Base error for embedding service failures."""
+    """Raised when embedding generation fails."""
 
 
 @dataclass
 class EmbeddingResponse:
     vector: List[float]
     model: str
+    dimensions: int
 
 
 class EmbeddingService:
-    """Simple wrapper for generating embeddings via Ollama's REST API."""
+    """Handles embedding creation with local-first fallback logic."""
 
-    def __init__(self, base_url: str, model_name: str, timeout: float = 15.0) -> None:
-        if not base_url:
-            raise ValueError("base_url darf nicht leer sein")
-
-        self.base_url = base_url.rstrip("/")
-        self.model_name = model_name
-        self.timeout = timeout
+    def __init__(
+        self,
+        settings: Optional[Settings] = None,
+        *,
+        requests_module: Optional[object] = None,
+    ) -> None:
+        self.settings = settings or get_settings()
+        self._requests = requests_module
 
     @classmethod
     def from_env(cls) -> Optional["EmbeddingService"]:
-        """Factory that builds a service instance from environment variables."""
+        """Factory that returns an instance if a backend is configured."""
 
-        base_url = os.getenv("OLLAMA_BASE_URL")
-        if not base_url:
+        settings = get_settings()
+        if not any(
+            [
+                settings.test_mode,
+                bool(settings.ollama_base_url),
+                bool(settings.openai_api_key),
+            ]
+        ):
             return None
-
-        model = os.getenv("OLLAMA_EMBED_MODEL", "nomic-embed-text")
-        timeout_env = os.getenv("OLLAMA_EMBED_TIMEOUT")
-        timeout = float(timeout_env) if timeout_env else 15.0
-        try:
-            return cls(base_url=base_url, model_name=model, timeout=timeout)
-        except ValueError:
-            logger.warning("EmbeddingService konnte nicht initialisiert werden (fehlende Konfiguration).")
-            return None
+        return cls(settings=settings)
 
     def generate(self, text: str) -> EmbeddingResponse:
-        """Generates an embedding for the provided text."""
+        """Generate an embedding for the supplied text."""
 
-        endpoint = f"{self.base_url}/api/embeddings"
-        payload = {"model": self.model_name, "prompt": text}
+        if not text:
+            raise EmbeddingServiceError("Text für Embedding darf nicht leer sein.")
 
-        if importlib.util.find_spec("requests") is None:
-            raise EmbeddingServiceError("Das 'requests'-Paket wird für Embedding-Aufrufe benötigt.")
+        if self.settings.test_mode:
+            vector = self._fake_embedding(text)
+            return EmbeddingResponse(vector=vector, model="test/fake", dimensions=len(vector))
 
-        requests_module = importlib.import_module("requests")
+        errors: List[str] = []
+
+        if self.settings.ollama_base_url:
+            try:
+                return self._generate_via_ollama(text)
+            except EmbeddingServiceError as exc:
+                errors.append(f"Ollama: {exc}")
+
+        if self.settings.openai_api_key:
+            try:
+                return self._generate_via_openai(text)
+            except EmbeddingServiceError as exc:
+                errors.append(f"OpenAI: {exc}")
+
+        if errors:
+            raise EmbeddingServiceError("; ".join(errors))
+
+        raise EmbeddingServiceError("Kein Embedding-Backend konfiguriert.")
+
+    # ------------------------------------------------------------------
+    # Backend implementations
+    # ------------------------------------------------------------------
+    def _generate_via_ollama(self, text: str) -> EmbeddingResponse:
+        endpoint = f"{self.settings.ollama_base_url.rstrip('/')}/api/embeddings"
+        payload = {"model": self.settings.ollama_embed_model, "prompt": text}
+
+        requests_module = self._ensure_requests()
 
         try:
-            response = requests_module.post(endpoint, json=payload, timeout=self.timeout)
-        except requests_module.RequestException as exc:  # pragma: no cover - network issues
-            raise EmbeddingServiceError("Verbindung zum Ollama Embedding-Service fehlgeschlagen.") from exc
+            response = requests_module.post(
+                endpoint,
+                json=payload,
+                timeout=self.settings.ollama_embed_timeout,
+            )
+        except requests_module.RequestException as exc:  # pragma: no cover - network errors
+            raise EmbeddingServiceError("Verbindung zu Ollama fehlgeschlagen.") from exc
 
         if response.status_code >= 400:
             raise EmbeddingServiceError(
-                f"Embedding-Service antwortete mit Status {response.status_code}: {response.text}"
+                f"Ollama antwortete mit Status {response.status_code}: {response.text}"
             )
 
         data = response.json()
         vector = self._extract_vector(data)
-        return EmbeddingResponse(vector=vector, model=self.model_name)
+        return EmbeddingResponse(vector=vector, model=self.settings.ollama_embed_model, dimensions=len(vector))
+
+    def _generate_via_openai(self, text: str) -> EmbeddingResponse:
+        base_url = self.settings.openai_base_url.rstrip("/")
+        endpoint = f"{base_url}/embeddings"
+        payload = {"model": self.settings.openai_embed_model, "input": text}
+
+        requests_module = self._ensure_requests()
+        headers = {
+            "Authorization": f"Bearer {self.settings.openai_api_key}",
+            "Content-Type": "application/json",
+        }
+        if self.settings.openai_organization:
+            headers["OpenAI-Organization"] = self.settings.openai_organization
+
+        try:
+            response = requests_module.post(
+                endpoint,
+                json=payload,
+                headers=headers,
+                timeout=self.settings.openai_embed_timeout,
+            )
+        except requests_module.RequestException as exc:  # pragma: no cover - network errors
+            raise EmbeddingServiceError("Verbindung zur OpenAI Embedding-API fehlgeschlagen.") from exc
+
+        if response.status_code >= 400:
+            raise EmbeddingServiceError(
+                f"OpenAI antwortete mit Status {response.status_code}: {response.text}"
+            )
+
+        data = response.json()
+        try:
+            vector = list(data["data"][0]["embedding"])
+        except (KeyError, IndexError, TypeError) as exc:
+            raise EmbeddingServiceError("Ungültige Embedding-Antwort von OpenAI erhalten.") from exc
+
+        return EmbeddingResponse(
+            vector=vector,
+            model=self.settings.openai_embed_model,
+            dimensions=len(vector),
+        )
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+    def _ensure_requests(self):
+        if self._requests is None:
+            try:
+                import requests as requests_module  # type: ignore
+            except ModuleNotFoundError as exc:  # pragma: no cover - defensive
+                raise EmbeddingServiceError("Das 'requests'-Paket wird für Embedding-Aufrufe benötigt.") from exc
+            self._requests = requests_module
+        return self._requests
 
     @staticmethod
     def _extract_vector(payload: dict) -> List[float]:
-        """Extracts the embedding vector from an Ollama response."""
-
         if "embedding" in payload:
-            return list(payload["embedding"])  # type: ignore[arg-type]
+            return [float(x) for x in payload["embedding"]]
 
-        if "embeddings" in payload and payload["embeddings"]:
-            return list(payload["embeddings"][0])  # type: ignore[index]
+        embeddings = payload.get("embeddings") or payload.get("data")
+        if embeddings:
+            first = embeddings[0]
+            if isinstance(first, dict):
+                vector = first.get("embedding")
+            else:
+                vector = first
+            if vector is not None:
+                return [float(x) for x in vector]
 
-        raise EmbeddingServiceError("Embedding-Vektor im Ollama-Response nicht gefunden.")
+        raise EmbeddingServiceError("Embedding-Vektor konnte nicht extrahiert werden.")
+
+    @staticmethod
+    def _fake_embedding(text: str) -> List[float]:
+        digest = hashlib.sha256(text.encode("utf-8")).digest()
+        vector = []
+        # Use 16 bytes → 8 deterministic pseudo-random floats in range [-1, 1].
+        for index in range(0, 16, 2):
+            segment = digest[index : index + 2]
+            value = int.from_bytes(segment, "big", signed=False)
+            normalized = (value / 65535.0) * 2 - 1
+            vector.append(round(normalized, 6))
+        return vector
 
 
-def serialize_embedding(vector: Optional[List[float]]) -> Optional[str]:
-    """Serializes an embedding vector for persistence."""
+def serialize_embedding(vector: Optional[Iterable[float]]) -> Optional[str]:
+    """Serialize an embedding vector into JSON."""
 
     if vector is None:
         return None
-
-    return json.dumps(vector)
+    return json.dumps([float(x) for x in vector])
 
 
 def deserialize_embedding(payload: Optional[str]) -> Optional[List[float]]:
-    """Deserializes an embedding vector from the database."""
+    """Deserialize an embedding vector from JSON."""
 
     if not payload:
         return None
-
     try:
         loaded = json.loads(payload)
     except json.JSONDecodeError as exc:  # pragma: no cover - defensive
@@ -114,3 +212,12 @@ def deserialize_embedding(payload: Optional[str]) -> Optional[List[float]]:
         raise EmbeddingServiceError("Gespeicherter Embedding-Vektor hat ein ungültiges Format.")
 
     return [float(x) for x in loaded]
+
+
+__all__ = [
+    "EmbeddingResponse",
+    "EmbeddingService",
+    "EmbeddingServiceError",
+    "deserialize_embedding",
+    "serialize_embedding",
+]
