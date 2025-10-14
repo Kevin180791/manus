@@ -1,7 +1,6 @@
-
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from routers import agent_tasks, upload_router, flowcalc_tasks, tga_router, knowledge_router
+from routers import agent_tasks, upload_router, flowcalc_tasks, tga_router, knowledge_router, execution_router
 from database import init_db
 import logging
 
@@ -37,6 +36,7 @@ app.include_router(upload_router.router, prefix="/documents", tags=["Legacy Uplo
 app.include_router(flowcalc_tasks.router, prefix="/agent/tasks", tags=["Legacy Flow Calc"])
 app.include_router(tga_router.router, prefix="/api/v1/tga", tags=["TGA Planprüfung"])
 app.include_router(knowledge_router.router)
+app.include_router(execution_router.router)
 
 @app.get("/", tags=["System"])
 def root():
@@ -49,10 +49,13 @@ def root():
             "Gewerkespezifische Fachprüfung",
             "Koordinationsprüfung",
             "Normkonformitätsprüfung",
-            "Datenpersistierung mit SQLAlchemy"
+            "Datenpersistierung mit SQLAlchemy",
+            "Ausführungsreife-Prüfung für ausführende Firmen",
+            "Automatische Materiallisten-Generierung"
         ]
     }
 
 @app.get("/health", tags=["System"])
 def health_check():
     return {"status": "healthy", "service": "tga-ki-plattform", "database": "connected"}
+
