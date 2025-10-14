@@ -11,6 +11,10 @@ export default defineConfig({
       '8329-ikcet3rmcs3e54arzrdar-f0085348.manusvm.computer'
     ],
     proxy: {
+      '/api': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+      },
       '/': {
         target: 'http://localhost:5173',
         changeOrigin: true,
@@ -19,3 +23,4 @@ export default defineConfig({
     },
   },
 })
+
