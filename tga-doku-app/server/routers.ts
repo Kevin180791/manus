@@ -5,6 +5,7 @@ import { publicProcedure, router } from "./_core/trpc";
 import { projectsRouter } from "./routers/projects";
 import { floorPlansRouter } from "./routers/floorplans";
 import { photosRouter } from "./routers/photos";
+import { findingsRouter } from "./routers/findings";
 
 export const appRouter = router({
   system: systemRouter,
@@ -23,6 +24,7 @@ export const appRouter = router({
   projects: projectsRouter,
   floorPlans: floorPlansRouter,
   photos: photosRouter,
+  findings: findingsRouter,
 });
 
 export type AppRouter = typeof appRouter;

@@ -196,10 +196,15 @@ export default function ProjectDetail() {
                   <span className="font-semibold">Fotos hinzufügen</span>
                   <span className="text-xs text-slate-600">Dokumentation starten</span>
                 </Button>
-                <Button variant="outline" className="h-auto py-6 flex-col gap-2" size="lg">
+                <Button 
+                  variant="outline" 
+                  className="h-auto py-6 flex-col gap-2" 
+                  size="lg"
+                  onClick={() => setLocation(`/projects/${projectId}/findings`)}
+                >
                   <FileText className="w-8 h-8 text-purple-600" />
-                  <span className="font-semibold">Bericht erstellen</span>
-                  <span className="text-xs text-slate-600">Word-Dokument</span>
+                  <span className="font-semibold">Feststellungen</span>
+                  <span className="text-xs text-slate-600">Verwalten & Dokumentieren</span>
                 </Button>
                 <Button variant="outline" className="h-auto py-6 flex-col gap-2" size="lg">
                   <Presentation className="w-8 h-8 text-orange-600" />
@@ -357,7 +362,10 @@ export default function ProjectDetail() {
               Laden Sie Fotos hoch und fügen Sie Beschreibungen hinzu
             </DialogDescription>
           </DialogHeader>
-          <PhotoUpload projectId={projectId} />
+          <PhotoUpload 
+            projectId={projectId} 
+            onUploadComplete={() => setShowPhotoDialog(false)}
+          />
         </DialogContent>
       </Dialog>
     </div>

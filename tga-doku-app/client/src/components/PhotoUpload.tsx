@@ -1,5 +1,5 @@
 import { useState, useCallback } from "react";
-import { Camera, X, Plus } from "lucide-react";
+import { Camera, X, Plus, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -16,11 +16,13 @@ interface Photo {
 interface PhotoUploadProps {
   projectId: string;
   onPhotosChange?: (photos: Photo[]) => void;
+  onUploadComplete?: () => void;
 }
 
-export default function PhotoUpload({ projectId, onPhotosChange }: PhotoUploadProps) {
+export default function PhotoUpload({ projectId, onPhotosChange, onUploadComplete }: PhotoUploadProps) {
   const [photos, setPhotos] = useState<Photo[]>([]);
   const [isDragging, setIsDragging] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -89,6 +91,35 @@ export default function PhotoUpload({ projectId, onPhotosChange }: PhotoUploadPr
     
     if (onPhotosChange) {
       onPhotosChange(updatedPhotos);
+    }
+  };
+
+  const handleUpload = async () => {
+    if (photos.length === 0) {
+      toast.error("Bitte wählen Sie mindestens ein Foto aus");
+      return;
+    }
+
+    setIsUploading(true);
+
+    try {
+      // TODO: Implement actual file upload to S3
+      // For now, simulate upload
+      await new Promise(resolve => setTimeout(resolve, 1500));
+
+      toast.success(`${photos.length} Foto(s) erfolgreich hochgeladen`);
+      
+      if (onUploadComplete) {
+        onUploadComplete();
+      }
+
+      // Reset
+      setPhotos([]);
+    } catch (error) {
+      toast.error("Fehler beim Hochladen");
+      console.error(error);
+    } finally {
+      setIsUploading(false);
     }
   };
 
@@ -187,6 +218,19 @@ export default function PhotoUpload({ projectId, onPhotosChange }: PhotoUploadPr
                 </CardContent>
               </Card>
             ))}
+          </div>
+
+          {/* Upload Button */}
+          <div className="mt-6 pt-6 border-t">
+            <Button
+              onClick={handleUpload}
+              disabled={isUploading || photos.length === 0}
+              className="w-full gap-2"
+              size="lg"
+            >
+              <Upload className="w-5 h-5" />
+              {isUploading ? "Wird hochgeladen..." : `${photos.length} Foto(s) hochladen`}
+            </Button>
           </div>
         </div>
       )}
