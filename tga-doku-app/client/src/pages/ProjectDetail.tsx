@@ -15,11 +15,23 @@ import {
   Presentation,
   Edit,
 } from "lucide-react";
+import FloorPlanUpload from "@/components/FloorPlanUpload";
+import PhotoUpload from "@/components/PhotoUpload";
+import { useState } from "react";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 
 export default function ProjectDetail() {
   const [, params] = useRoute("/projects/:id");
   const [, setLocation] = useLocation();
   const projectId = params?.id || "";
+  const [showFloorPlanDialog, setShowFloorPlanDialog] = useState(false);
+  const [showPhotoDialog, setShowPhotoDialog] = useState(false);
 
   const { data: project, isLoading } = trpc.projects.getById.useQuery(
     { id: projectId },
@@ -164,12 +176,22 @@ export default function ProjectDetail() {
                 </CardDescription>
               </CardHeader>
               <CardContent className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <Button variant="outline" className="h-auto py-6 flex-col gap-2" size="lg">
+                <Button 
+                  variant="outline" 
+                  className="h-auto py-6 flex-col gap-2" 
+                  size="lg"
+                  onClick={() => setShowFloorPlanDialog(true)}
+                >
                   <Upload className="w-8 h-8 text-blue-600" />
                   <span className="font-semibold">Grundriss hochladen</span>
                   <span className="text-xs text-slate-600">PDF oder Bild</span>
                 </Button>
-                <Button variant="outline" className="h-auto py-6 flex-col gap-2" size="lg">
+                <Button 
+                  variant="outline" 
+                  className="h-auto py-6 flex-col gap-2" 
+                  size="lg"
+                  onClick={() => setShowPhotoDialog(true)}
+                >
                   <Camera className="w-8 h-8 text-green-600" />
                   <span className="font-semibold">Fotos hinzufügen</span>
                   <span className="text-xs text-slate-600">Dokumentation starten</span>
@@ -309,6 +331,35 @@ export default function ProjectDetail() {
           </div>
         </div>
       </main>
+
+      {/* Floor Plan Upload Dialog */}
+      <Dialog open={showFloorPlanDialog} onOpenChange={setShowFloorPlanDialog}>
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Grundriss hochladen</DialogTitle>
+            <DialogDescription>
+              Laden Sie einen Grundriss als PDF oder Bild hoch
+            </DialogDescription>
+          </DialogHeader>
+          <FloorPlanUpload 
+            projectId={projectId} 
+            onUploadComplete={() => setShowFloorPlanDialog(false)}
+          />
+        </DialogContent>
+      </Dialog>
+
+      {/* Photo Upload Dialog */}
+      <Dialog open={showPhotoDialog} onOpenChange={setShowPhotoDialog}>
+        <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Fotos hinzufügen</DialogTitle>
+            <DialogDescription>
+              Laden Sie Fotos hoch und fügen Sie Beschreibungen hinzu
+            </DialogDescription>
+          </DialogHeader>
+          <PhotoUpload projectId={projectId} />
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
