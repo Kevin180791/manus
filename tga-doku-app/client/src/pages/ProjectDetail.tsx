@@ -32,11 +32,47 @@ export default function ProjectDetail() {
   const projectId = params?.id || "";
   const [showFloorPlanDialog, setShowFloorPlanDialog] = useState(false);
   const [showPhotoDialog, setShowPhotoDialog] = useState(false);
+  const [isGeneratingReport, setIsGeneratingReport] = useState(false);
+  const [isGeneratingPresentation, setIsGeneratingPresentation] = useState(false);
 
   const { data: project, isLoading } = trpc.projects.getById.useQuery(
     { id: projectId },
     { enabled: !!projectId }
   );
+
+  const generateReport = trpc.reports.generateReport.useMutation({
+    onSuccess: () => {
+      toast.success("Bericht wird erstellt...");
+      setIsGeneratingReport(false);
+      // TODO: Download or display the generated report
+    },
+    onError: () => {
+      toast.error("Fehler beim Erstellen des Berichts");
+      setIsGeneratingReport(false);
+    },
+  });
+
+  const generatePresentation = trpc.reports.generatePresentation.useMutation({
+    onSuccess: () => {
+      toast.success("Präsentation wird erstellt...");
+      setIsGeneratingPresentation(false);
+      // TODO: Download or display the generated presentation
+    },
+    onError: () => {
+      toast.error("Fehler beim Erstellen der Präsentation");
+      setIsGeneratingPresentation(false);
+    },
+  });
+
+  const handleGenerateReport = () => {
+    setIsGeneratingReport(true);
+    generateReport.mutate({ projectId });
+  };
+
+  const handleGeneratePresentation = () => {
+    setIsGeneratingPresentation(true);
+    generatePresentation.mutate({ projectId });
+  };
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -206,9 +242,30 @@ export default function ProjectDetail() {
                   <span className="font-semibold">Feststellungen</span>
                   <span className="text-xs text-slate-600">Verwalten & Dokumentieren</span>
                 </Button>
-                <Button variant="outline" className="h-auto py-6 flex-col gap-2" size="lg">
+                <Button 
+                  variant="outline" 
+                  className="h-auto py-6 flex-col gap-2" 
+                  size="lg"
+                  onClick={handleGenerateReport}
+                  disabled={isGeneratingReport}
+                >
+                  <FileText className="w-8 h-8 text-blue-600" />
+                  <span className="font-semibold">
+                    {isGeneratingReport ? "Wird erstellt..." : "Bericht"}
+                  </span>
+                  <span className="text-xs text-slate-600">Word-Dokument</span>
+                </Button>
+                <Button 
+                  variant="outline" 
+                  className="h-auto py-6 flex-col gap-2" 
+                  size="lg"
+                  onClick={handleGeneratePresentation}
+                  disabled={isGeneratingPresentation}
+                >
                   <Presentation className="w-8 h-8 text-orange-600" />
-                  <span className="font-semibold">Präsentation</span>
+                  <span className="font-semibold">
+                    {isGeneratingPresentation ? "Wird erstellt..." : "Präsentation"}
+                  </span>
                   <span className="text-xs text-slate-600">Automatisch generieren</span>
                 </Button>
               </CardContent>

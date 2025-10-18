@@ -6,6 +6,7 @@ import { projectsRouter } from "./routers/projects";
 import { floorPlansRouter } from "./routers/floorplans";
 import { photosRouter } from "./routers/photos";
 import { findingsRouter } from "./routers/findings";
+import { reportsRouter } from "./routers/reports";
 
 export const appRouter = router({
   system: systemRouter,
@@ -25,6 +26,7 @@ export const appRouter = router({
   floorPlans: floorPlansRouter,
   photos: photosRouter,
   findings: findingsRouter,
+  reports: reportsRouter,
 });
 
 export type AppRouter = typeof appRouter;
