@@ -20,6 +20,39 @@ export const photosRouter = router({
       return allPhotos;
     }),
 
+  upload: publicProcedure
+    .input(
+      z.object({
+        projectId: z.string(),
+        inspectionId: z.string().optional(),
+        findingId: z.string().optional(),
+        fileData: z.string(), // base64 encoded
+        fileName: z.string(),
+        caption: z.string().optional(),
+      })
+    )
+    .mutation(async ({ input }) => {
+      const db = await getDb();
+      if (!db) throw new Error("Database not available");
+
+      // For now, store base64 data directly
+      // TODO: Implement S3 upload in production
+      const photoId = nanoid();
+
+      const newPhoto = await db.insert(photos).values({
+        id: photoId,
+        projectId: input.projectId,
+        inspectionId: input.inspectionId,
+        findingId: input.findingId,
+        filePath: input.fileData, // Store base64 temporarily
+        fileName: input.fileName,
+        caption: input.caption,
+        createdAt: new Date(),
+      });
+
+      return { success: true, id: photoId, url: input.fileData };
+    }),
+
   create: publicProcedure
     .input(
       z.object({
@@ -40,7 +73,7 @@ export const photosRouter = router({
         projectId: input.projectId,
         inspectionId: input.inspectionId,
         findingId: input.findingId,
-        fileUrl: input.fileUrl,
+        filePath: input.fileUrl,
         caption: input.caption,
         position: input.position,
         createdAt: new Date(),
