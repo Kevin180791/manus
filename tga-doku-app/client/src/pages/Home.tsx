@@ -2,7 +2,10 @@ import { useAuth } from "@/_core/hooks/useAuth";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
+import { Button } from "@/components/ui/button";
 import { APP_TITLE } from "@/const";
+import { Link } from "wouter";
+import { LayoutDashboard } from "lucide-react";
 
 interface Finding {
   id: string;
@@ -87,9 +90,17 @@ export default function Home() {
       {/* Header */}
       <header className="bg-white border-b border-slate-200 shadow-sm">
         <div className="container py-8">
-          <h1 className="text-4xl font-bold text-slate-900 mb-2">
-            Begehungs- und Übergabedokumentation
-          </h1>
+          <div className="flex items-center justify-between mb-4">
+            <h1 className="text-4xl font-bold text-slate-900">
+              Begehungs- und Übergabedokumentation
+            </h1>
+            <Link href="/dashboard">
+              <Button size="lg" className="gap-2">
+                <LayoutDashboard className="w-5 h-5" />
+                Zur App
+              </Button>
+            </Link>
+          </div>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mt-6 text-sm">
             <div>
               <span className="font-semibold text-slate-700">Projekt:</span>
