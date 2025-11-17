@@ -1,0 +1,1 @@
+ALTER TABLE `projectDocuments` MODIFY COLUMN `category` enum('plan','contract','rfi','measurement','progress_report','export','other') NOT NULL;
