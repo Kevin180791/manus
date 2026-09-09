@@ -135,22 +135,55 @@ class KnowledgeBuilder:
 
     def _iter_table_chunks(self, tabellen_daten: Iterable[dict]) -> Iterable[Dict[str, object]]:
         for index, table in enumerate(tabellen_daten):
-            headers = table.get("headers") or []
-            rows = table.get("rows") or table.get("data") or []
+            header_lookup: List[object] = []
+            rows: Iterable[object]
 
-            if not rows:
+            if isinstance(table, dict):
+                raw_headers = table.get("headers") or []
+                if isinstance(raw_headers, (list, tuple)):
+                    header_lookup = list(raw_headers)
+                elif raw_headers:
+                    header_lookup = [raw_headers]
+                rows = table.get("rows") or table.get("data") or []
+            elif isinstance(table, (list, tuple)):
+                if not table:
+                    continue
+                first_row = table[0]
+                if isinstance(first_row, (list, tuple)):
+                    header_lookup = list(first_row)
+                    rows = table[1:]
+                else:
+                    rows = table
+            else:
                 continue
 
-            lines = []
-            if headers:
-                lines.append(" | ".join(str(h) for h in headers))
+            headers = [self._stringify_cell(cell) for cell in header_lookup]
+            lines: List[str] = []
 
-            for row in rows:
+            if headers and any(header.strip() for header in headers):
+                lines.append(" | ".join(headers))
+            else:
+                headers = []
+
+            for row in rows or []:
                 if isinstance(row, dict):
-                    row_values = [str(row.get(h, "")) for h in headers]
+                    if header_lookup:
+                        raw_values = [row.get(header, "") for header in header_lookup]
+                    else:
+                        raw_values = list(row.values())
+                elif isinstance(row, (list, tuple)):
+                    raw_values = list(row)
                 else:
-                    row_values = [str(cell) for cell in row]
+                    continue
+
+                row_values = [self._stringify_cell(value) for value in raw_values]
+                if not any(value.strip() for value in row_values):
+                    continue
+
                 lines.append(" | ".join(row_values))
+
+            if not lines:
+                continue
 
             table_text = "\n".join(lines)
 
@@ -158,3 +191,9 @@ class KnowledgeBuilder:
                 "text": table_text,
                 "metadata": {"source": "table", "table_index": index, "headers": headers},
             }
+
+    @staticmethod
+    def _stringify_cell(value: object) -> str:
+        if value is None:
+            return ""
+        return str(value).strip()
